@@ -124,6 +124,7 @@ python scripts/compare_gates.py vit.onnx --num_videos 12
 python scripts/train_eval_gate.py feats_synth.npz vit.onnx video.mp4 START X Y W H
 python scripts/compare_gates.py vit.onnx video.mp4 START X Y W H 12
 ```
+- Eğitim ve karşılaştırma her koşuyu `experiments/<tarih-saat>_<ad>/` altına kaydeder: `run.json` (ayarlar, tohum, kod sürümü, paket sürümleri, girdi dosyası özetleri), `metrics.json`, tablolar, grafikler ve eğitilen model. Özet satırları `experiments/summary.jsonl` dosyasında birikir. `--run_name` ile ad verilir. Bu klasör Git'e girmez.
 - `X Y W H`: başlangıç karesindeki hedef kutusu (sol üst köşe, genişlik, yükseklik).
 - `--video` bir görüntü klasörü de olabilir.
 - Eğitim ve karşılaştırma video gerektirmez. İsteğe bağlı video bölümü yalnızca **kırmızı** hedefli videolarda anlamlıdır: etiket renkten yaklaşık olarak çıkarılır.
@@ -142,7 +143,7 @@ Resmî site erişilemediği için betik Internet Archive kopyalarını indirir; 
 configs/       eşikler ve ayarlar
 core/          takipçi sarmalayıcı, Kalman, özellikler, güven ağı, durum makinesi
 utils/         kutu işlemleri, video okuma ve argümanları, çizim, sentetik sahne ve kapanma, renkten yaklaşık etiket
-evaluation/    metrikler
+evaluation/    metrikler, deney kaydı, grafikler
 scripts/       kurulum kontrolü, test, video çalıştırma, eğitim, karşılaştırma, veri indirme
 ```
 

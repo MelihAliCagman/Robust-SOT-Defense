@@ -28,6 +28,7 @@ class ConfidenceNet:
         self.sc = StandardScaler()
         self.m = MLPClassifier(hidden, activation="relu", alpha=1e-3, random_state=seed)  # alpha: L2 cezası
         self.best_epoch = None
+        self.history = []  # epoch başına {"epoch", "train_loss", "val_loss"}
 
     def fit(self, X, y, groups=None):
         """groups: kare başına video numarası.
@@ -44,11 +45,15 @@ class ConfidenceNet:
         X_val = self.sc.transform(X[val_idx]) if val_idx is not None else None
 
         best_loss, best_model, wait = np.inf, None, 0
+        self.history = []
         for epoch in range(1, self.max_epochs + 1):
             self.m.partial_fit(X_train, y[train_idx], classes=[0, 1])  # bir epoch
+            record = {"epoch": epoch, "train_loss": float(self.m.loss_), "val_loss": None}
+            self.history.append(record)
             if val_idx is None:
                 continue
             loss = log_loss(y[val_idx], self.m.predict_proba(X_val), labels=[0, 1])
+            record["val_loss"] = float(loss)
             if loss < best_loss - MIN_IMPROVEMENT:
                 best_loss, best_model, wait = loss, copy.deepcopy(self.m), 0
                 self.best_epoch = epoch

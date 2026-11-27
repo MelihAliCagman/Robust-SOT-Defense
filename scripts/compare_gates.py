@@ -5,9 +5,11 @@ Kullanım:
     python scripts/compare_gates.py vit.onnx [--num_videos 12]
     python scripts/compare_gates.py vit.onnx video.mp4 START X Y W H [VIDEO_SAYISI]
 Gerekli: çalışma klasöründe train_eval_gate.py'nin ürettiği confidence_net.pkl ve gate_thresholds.npz
+Her koşu experiments/ altında kaydedilir; per_video.csv her videonun sonucunu tek tek içerir.
 """
 import argparse
 import sys
+from dataclasses import asdict
 from pathlib import Path
 
 import numpy as np
@@ -17,6 +19,7 @@ from configs.tracker_config import Config
 from core.backbone import OpenCVTracker
 from core.confidence_net import ConfidenceNet, LearnedGate
 from core.pipeline import run_baseline, run_pipeline
+from evaluation.experiment import Experiment
 from evaluation.metrics import per_frame, precision_at, recovery_rate, success_auc
 from utils.pseudo_labels import red_boxes
 from utils.synthetic_occlusion import KINDS, MODES, alpha_for, apply_occlusion
@@ -52,8 +55,13 @@ def evaluate(frames, gts, labels, model, net, cfg, net_thr):
     return scores
 
 
-def evaluate_synthetic(num_videos, model, net, cfg, net_thr):
-    collected = {}
+def result_row(video, name, values, **extra):
+    auc, precision, recovery = values
+    return {"video": video, "system": name, "success_auc": auc, "precision20": precision, "recovery": recovery, **extra}
+
+
+def evaluate_synthetic(num_videos, model, net, cfg, net_thr, run):
+    collected, rows_per_video = {}, []
     rng = np.random.default_rng(7)
     for video in range(num_videos):
         frames, gts = make_scene(FIRST_SCENE_SEED + video)
@@ -65,19 +73,35 @@ def evaluate_synthetic(num_videos, model, net, cfg, net_thr):
         frames, labels = apply_occlusion(frames, gts, start, length, kind, mode, video, alpha=alpha_for(kind))
         for name, values in evaluate(frames, gts, labels, model, net, cfg, net_thr).items():
             collected.setdefault(name, []).append(values)
+            rows_per_video.append(result_row(f"synthetic_{FIRST_SCENE_SEED + video}", name, values,
+                                             kind=kind, mode=mode, start=start, length=length))
 
     print(f"[sentetik, {num_videos} yeni video, ortalama]  (AUC, P@20, Recovery)")
+    means = {}
     for name, rows in collected.items():
         auc, precision, recovery = (np.nanmean([row[i] for row in rows]) for i in range(3))
         print(f"  {name:20s} AUC={auc:.3f} P@20={precision:.3f} Rec={recovery:.2f}")
+        means[name] = {"success_auc": auc, "precision20": precision, "recovery": recovery}
+
+    # ortalama yanıltabilir: sistemin takipçi tek başınadan KÖTÜ olduğu videolar ayrıca sayılır
+    for name, rows in collected.items():
+        if name != "A0 baseline":
+            worse = sum(row[0] < base[0] for row, base in zip(rows, collected["A0 baseline"]))
+            means[name]["videos_worse_than_baseline"] = worse
+    run.log_table("per_video", rows_per_video)
+    run.log_metrics({"synthetic_videos": num_videos, "synthetic_mean": means})
 
 
-def evaluate_video(frames, model, net, cfg, net_thr):
+def evaluate_video(frames, model, net, cfg, net_thr, run):
     gts = red_boxes(frames)
     labels = [1 if gt is None else 0 for gt in gts]  # kırmızı görünmüyorsa "kapalı" say
     print("[gerçek video (sözde-GT)]")
-    for name, (auc, precision, recovery) in evaluate(frames, gts, labels, model, net, cfg, net_thr).items():
+    results = evaluate(frames, gts, labels, model, net, cfg, net_thr)
+    for name, (auc, precision, recovery) in results.items():
         print(f"  {name:20s} AUC={auc:.3f} P@20={precision:.3f} Rec={recovery:.2f}")
+    run.log_metrics({"video_pseudo_labels": {
+        name: {"success_auc": auc, "precision20": precision, "recovery": recovery}
+        for name, (auc, precision, recovery) in results.items()}})
 
 
 def main():
@@ -86,6 +110,8 @@ def main():
     parser.add_argument("video_spec", nargs="*", metavar="VIDEO_BİLGİSİ",
                         help=f"isteğe bağlı: {USAGE} [VIDEO_SAYISI]. X Y W H kullanılmaz (kutular renkten çıkar)")
     parser.add_argument("--num_videos", type=int, default=12, help="sentetik test videosu sayısı")
+    parser.add_argument("--run_name", default="compare_gates", help="deney kaydının adı")
+    parser.add_argument("--log_dir", help="deney kayıtlarının kök klasörü (varsayılan: experiments/)")
     args = parser.parse_args()
 
     values, num_videos = args.video_spec, args.num_videos
@@ -101,9 +127,17 @@ def main():
     cfg.score_thr, net_thr = float(thresholds["thr_s"]), float(thresholds["thr_p"])
     print(f"eşikler: skor {cfg.score_thr:.2f}, ağ {net_thr:.2f}")
 
-    evaluate_synthetic(num_videos, args.model, net, cfg, net_thr)
-    if video is not None:
-        evaluate_video(read_frames(video.path, start=video.start), args.model, net, cfg, net_thr)
+    params = {"tracker_config": asdict(cfg), "threshold_net": net_thr, "num_videos": num_videos,
+              "first_scene_seed": FIRST_SCENE_SEED, "rng_seed": 7}
+    with Experiment(args.run_name, params, args.log_dir) as run:
+        run.add_input("net", "confidence_net.pkl")
+        run.add_input("thresholds", "gate_thresholds.npz")
+        run.add_input("tracker_model", args.model)
+        evaluate_synthetic(num_videos, args.model, net, cfg, net_thr, run)
+        if video is not None:
+            run.add_input("video", video.path)
+            evaluate_video(read_frames(video.path, start=video.start), args.model, net, cfg, net_thr, run)
+        print(f"deney kaydı: {run.dir}")
 
 
 if __name__ == "__main__":

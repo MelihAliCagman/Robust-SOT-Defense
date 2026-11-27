@@ -6,6 +6,7 @@ __pycache__/
 vit.onnx
 out*
 datasets/
+experiments/
 notlar/
 ders_notlari/
 videos/
