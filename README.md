@@ -101,15 +101,19 @@ python scripts/run_video.py --video video.mp4 --start 0 --box X Y W H --model vi
 # Eğitim verisi üretimi
 python scripts/dump_features.py vit.onnx 70 feats_synth.npz
 
-# Güven ağını eğitme ve ölçme
-python scripts/train_eval_gate.py feats_synth.npz vit.onnx video.mp4 START X Y W H
+# Güven ağını eğitme ve ölçme (confidence_net.pkl ve gate_thresholds.npz üretir)
+python scripts/train_eval_gate.py feats_synth.npz
 
-# Skor eşiği ve öğrenilmiş kapıyı karşılaştırma
+# Skor eşiği ve öğrenilmiş kapıyı sentetik videolarda karşılaştırma (önceki adımın iki çıktısını okur)
+python scripts/compare_gates.py vit.onnx --num_videos 12
+
+# İsteğe bağlı: aynı iki adım, ek olarak kırmızı hedefli bir videoda da ölçer
+python scripts/train_eval_gate.py feats_synth.npz vit.onnx video.mp4 START X Y W H
 python scripts/compare_gates.py vit.onnx video.mp4 START X Y W H 12
 ```
 - `X Y W H`: başlangıç karesindeki hedef kutusu (sol üst köşe, genişlik, yükseklik).
 - `--video` bir görüntü klasörü de olabilir.
-- Son iki komut şu an bir video gerektirir ve o videodaki **kırmızı** bir hedeften yaklaşık etiket çıkarır.
+- Eğitim ve karşılaştırma video gerektirmez. İsteğe bağlı video bölümü yalnızca **kırmızı** hedefli videolarda anlamlıdır: etiket renkten yaklaşık olarak çıkarılır.
 - Selftest için 27 Kasım 2026 ölçümü: takipçi 0,754 / skor + Kalman 0,421 / yeniden yakalamalı 0,828 (Success AUC). Farklı ortamlarda değerler değişebilir.
 
 Videoda yeşil kutu takibi, kırmızı kutu kapanma durumundaki Kalman tahminini gösterir.
@@ -124,7 +128,7 @@ Resmî site erişilemediği için betik Internet Archive kopyalarını indirir; 
 ```
 configs/       eşikler ve ayarlar
 core/          takipçi sarmalayıcı, Kalman, özellikler, güven ağı, durum makinesi
-utils/         kutu işlemleri, video okuma, çizim, sentetik sahne ve kapanma, renkten yaklaşık etiket
+utils/         kutu işlemleri, video okuma ve argümanları, çizim, sentetik sahne ve kapanma, renkten yaklaşık etiket
 evaluation/    metrikler
 scripts/       test, video çalıştırma, eğitim, karşılaştırma, veri indirme
 ```

@@ -1,8 +1,11 @@
 """Güven ağını sentetik veride eğitir (video bazında eğitim/doğrulama/test) ve ölçer.
 
-Ardından bir videoda, kırmızı hedefin renk maskesinden çıkan YAKLAŞIK etiketle sınar.
-Kullanım: python scripts/train_eval_gate.py feats_synth.npz vit.onnx video.mp4 START X Y W H
+Video verilirse ayrıca o videoda, kırmızı hedefin renk maskesinden çıkan YAKLAŞIK etiketle sınar.
+Kullanım:
+    python scripts/train_eval_gate.py feats_synth.npz
+    python scripts/train_eval_gate.py feats_synth.npz vit.onnx video.mp4 START X Y W H
 Çıktı: confidence_net.pkl ve gate_thresholds.npz (doğrulamada seçilen eşikler; compare_gates.py okur).
+İki dosya da video bölümünden ÖNCE kaydedilir.
 """
 import argparse
 import sys
@@ -16,6 +19,7 @@ from core.backbone import OpenCVTracker
 from core.confidence_net import ConfidenceNet
 from scripts.dump_features import extract
 from utils.pseudo_labels import red_boxes
+from utils.video_args import USAGE, parse_video_spec
 from utils.video_io import read_frames
 
 
@@ -69,16 +73,19 @@ def evaluate_on_video(net, score_thr, net_thr, frames, init_box, tracker):
 def main():
     parser = argparse.ArgumentParser(description="Güven ağını eğitir ve ölçer.")
     parser.add_argument("features", help="dump_features.py çıktısı (.npz)")
-    parser.add_argument("model", help="vit.onnx dosyasının yolu")
-    parser.add_argument("video", help="kırmızı hedefli, kutu çizilmemiş video")
-    parser.add_argument("start", type=int, help="kutunun verildiği kare")
-    parser.add_argument("box", type=float, nargs=4, metavar=("X", "Y", "W", "H"))
+    parser.add_argument("model", nargs="?", help="vit.onnx dosyasının yolu (yalnızca video bölümü için)")
+    parser.add_argument("video_spec", nargs="*", metavar="VIDEO_BİLGİSİ",
+                        help=f"isteğe bağlı, 6 değer: {USAGE} (kırmızı hedefli, kutu çizilmemiş video)")
     args = parser.parse_args()
+    video = parse_video_spec(parser, args.video_spec)  # hatalı argüman eğitimden önce yakalanır
 
     net, score_thr, net_thr = train_on_synthetic(args.features)
-    frames = read_frames(args.video, start=args.start)
-    evaluate_on_video(net, score_thr, net_thr, frames, args.box, OpenCVTracker("vit", args.model))
     np.savez("gate_thresholds.npz", thr_s=score_thr, thr_p=net_thr)
+    print(f"kaydedildi: confidence_net.pkl, gate_thresholds.npz  (eşikler: skor {score_thr:.2f}, ağ {net_thr:.2f})")
+
+    if video is not None:
+        frames = read_frames(video.path, start=video.start)
+        evaluate_on_video(net, score_thr, net_thr, frames, video.box, OpenCVTracker("vit", args.model))
 
 
 if __name__ == "__main__":

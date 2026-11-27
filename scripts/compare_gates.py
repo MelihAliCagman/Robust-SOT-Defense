@@ -1,7 +1,9 @@
 """Skor eşiği kapısı ile öğrenilmiş kapıyı uçtan uca karşılaştırır.
 
-Veri: eğitimde kullanılmayan sentetik videolar + bir videoda yaklaşık (sözde) etiket.
-Kullanım: python scripts/compare_gates.py vit.onnx video.mp4 START X Y W H [VIDEO_SAYISI]
+Veri: eğitimde kullanılmayan sentetik videolar; video verilirse ayrıca onda yaklaşık (sözde) etiket.
+Kullanım:
+    python scripts/compare_gates.py vit.onnx [--num_videos 12]
+    python scripts/compare_gates.py vit.onnx video.mp4 START X Y W H [VIDEO_SAYISI]
 Gerekli: çalışma klasöründe train_eval_gate.py'nin ürettiği confidence_net.pkl ve gate_thresholds.npz
 """
 import argparse
@@ -19,6 +21,7 @@ from evaluation.metrics import per_frame, precision_at, recovery_rate, success_a
 from utils.pseudo_labels import red_boxes
 from utils.synthetic_occlusion import KINDS, MODES, alpha_for, apply_occlusion
 from utils.synthetic_scenes import make_scene
+from utils.video_args import USAGE, parse_video_spec
 from utils.video_io import read_frames
 
 FIRST_SCENE_SEED = 5000  # eğitim tohumlarından (1000+) farklı
@@ -80,12 +83,17 @@ def evaluate_video(frames, model, net, cfg, net_thr):
 def main():
     parser = argparse.ArgumentParser(description="Skor eşiği ve öğrenilmiş kapıyı karşılaştırır.")
     parser.add_argument("model", help="vit.onnx dosyasının yolu")
-    parser.add_argument("video", help="kırmızı hedefli, kutu çizilmemiş video")
-    parser.add_argument("start", type=int, help="kutunun verildiği kare")
-    # X Y W H değerleri geriye uyumluluk için alınır; kutular renk maskesinden çıkarılır
-    parser.add_argument("box", type=float, nargs=4, metavar=("X", "Y", "W", "H"), help="kullanılmıyor")
-    parser.add_argument("num_videos", type=int, nargs="?", default=12)
+    parser.add_argument("video_spec", nargs="*", metavar="VIDEO_BİLGİSİ",
+                        help=f"isteğe bağlı: {USAGE} [VIDEO_SAYISI]. X Y W H kullanılmaz (kutular renkten çıkar)")
+    parser.add_argument("--num_videos", type=int, default=12, help="sentetik test videosu sayısı")
     args = parser.parse_args()
+
+    values, num_videos = args.video_spec, args.num_videos
+    if len(values) == 7:  # eski kullanım: video sayısı en sonda
+        if not values[6].isdigit():
+            parser.error("son değer (video sayısı) tam sayı olmalı")
+        values, num_videos = values[:6], int(values[6])
+    video = parse_video_spec(parser, values)
 
     net = ConfidenceNet.load("confidence_net.pkl")
     thresholds = np.load("gate_thresholds.npz")  # iki kapının da eşiği doğrulamada seçilmiştir
@@ -93,8 +101,9 @@ def main():
     cfg.score_thr, net_thr = float(thresholds["thr_s"]), float(thresholds["thr_p"])
     print(f"eşikler: skor {cfg.score_thr:.2f}, ağ {net_thr:.2f}")
 
-    evaluate_synthetic(args.num_videos, args.model, net, cfg, net_thr)
-    evaluate_video(read_frames(args.video, start=args.start), args.model, net, cfg, net_thr)
+    evaluate_synthetic(num_videos, args.model, net, cfg, net_thr)
+    if video is not None:
+        evaluate_video(read_frames(video.path, start=video.start), args.model, net, cfg, net_thr)
 
 
 if __name__ == "__main__":
