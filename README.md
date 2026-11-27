@@ -72,7 +72,7 @@ Sonuç eşiğe çok duyarlı: sentetik veride seçilen eşik bu videoya uymuyor.
 - Videoda hedef seçilebilen etkileşimli demo
 
 ## Kurulum
-Python 3.10 veya üstü gerekir; mevcut sürüm CPU'da çalışır. Denenen ortam: Windows 11, Python 3.13.5, OpenCV 4.10.0, NumPy 2.4.2.
+Python 3.11 veya üstü gerekir (sabitlenen sürümler için); mevcut takip ve eğitim kodu CPU'da çalışır. Denenen ortam: Windows 11, Python 3.13.5, OpenCV 4.10.0, NumPy 2.4.2.
 
 ```
 git clone https://github.com/MelihAliCagman/Robust-SOT-Defense.git
@@ -80,6 +80,19 @@ cd Robust-SOT-Defense
 python -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements.txt
+```
+
+PowerShell sanal ortamı etkinleştirmeyi engellerse: `Set-ExecutionPolicy -Scope Process Bypass`. OpenCV paketlerinden yalnızca `opencv-contrib-python` kurulu olmalıdır; birden fazla OpenCV paketi birbirinin dosyalarını ezer.
+
+**PyTorch (planlanan derin modeller için), NVIDIA ekran kartıyla:**
+```
+pip install -r requirements-gpu.txt
+```
+Yaklaşık 2 GB indirir. Güncel bir NVIDIA sürücüsü gerekir. RTX 3050 Laptop (4 GB) üzerinde denendi.
+
+**Kurulumu doğrulama** (PyTorch kurulduktan ve takipçi modeli indirildikten sonra):
+```
+python scripts/check_env.py vit.onnx
 ```
 
 Takipçi modeli depoda yoktur, [OpenCV Zoo](https://github.com/opencv/opencv_zoo)'dan indirilir:
@@ -130,7 +143,7 @@ configs/       eşikler ve ayarlar
 core/          takipçi sarmalayıcı, Kalman, özellikler, güven ağı, durum makinesi
 utils/         kutu işlemleri, video okuma ve argümanları, çizim, sentetik sahne ve kapanma, renkten yaklaşık etiket
 evaluation/    metrikler
-scripts/       test, video çalıştırma, eğitim, karşılaştırma, veri indirme
+scripts/       kurulum kontrolü, test, video çalıştırma, eğitim, karşılaştırma, veri indirme
 ```
 
 ## Yapay zeka kullanımı

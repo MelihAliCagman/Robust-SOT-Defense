@@ -1,0 +1,4 @@
+# NVIDIA ekran kartı için PyTorch (CUDA 13.0 derlemesi). Önce requirements.txt kurulmalıdır.
+--index-url https://download.pytorch.org/whl/cu130
+torch==2.14.1
+torchvision==0.29.1

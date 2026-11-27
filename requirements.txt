@@ -1,4 +1,6 @@
-opencv-contrib-python
-numpy
-matplotlib
-scikit-learn
+# Denenen sürümler (Python 3.13.5, Windows 11). OpenCV için yalnızca contrib paketi kurulmalıdır.
+opencv-contrib-python==4.10.0.84
+numpy==2.4.2
+scipy==1.17.0
+scikit-learn==1.9.1
+matplotlib==3.10.8
