@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.mp4
+*.npz
+*.pkl
+vit.onnx
+out*
+datasets/
+notlar/
+ders_notlari/
+videos/
