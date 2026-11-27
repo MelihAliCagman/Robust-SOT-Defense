@@ -1,47 +1,101 @@
-"""A1 (skor eşiği) vs A2 (öğrenilmiş ağ) uçtan uca. Sentetik held-out + gerçek video (sözde-GT)."""
-import sys, numpy as np, cv2
-sys.path.insert(0, ".")
+"""Skor eşiği kapısı ile öğrenilmiş kapıyı uçtan uca karşılaştırır.
+
+Veri: eğitimde kullanılmayan sentetik videolar + bir videoda yaklaşık (sözde) etiket.
+Kullanım: python scripts/compare_gates.py vit.onnx video.mp4 START X Y W H [VIDEO_SAYISI]
+Gerekli: çalışma klasöründe train_eval_gate.py'nin ürettiği confidence_net.pkl ve gate_thresholds.npz
+"""
+import argparse
+import sys
+from pathlib import Path
+
+import numpy as np
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from configs.tracker_config import Config
 from core.backbone import OpenCVTracker
-from core.pipeline import run_baseline, run_pipeline
 from core.confidence_net import ConfidenceNet, LearnedGate
-from evaluation.metrics import per_frame, success_auc, precision_at, recovery_rate
+from core.pipeline import run_baseline, run_pipeline
+from evaluation.metrics import per_frame, precision_at, recovery_rate, success_auc
+from utils.pseudo_labels import red_boxes
+from utils.synthetic_occlusion import KINDS, MODES, alpha_for, apply_occlusion
 from utils.synthetic_scenes import make_scene
-from utils.synthetic_occlusion import apply_occlusion
-from scripts.train_eval_gate import red_boxes
+from utils.video_io import read_frames
 
-def evaluate(fr, gts, labels, model, net, cfg, thr_p):
-    vis = [i for i, g in enumerate(gts) if g is not None]
-    res = {}
-    for name, fn in (("A0 baseline", lambda: run_baseline(fr, gts[0], OpenCVTracker("vit", model))),
-                     ("A3 eşik-kapı", lambda: run_pipeline(fr, gts[0], OpenCVTracker("vit", model), cfg)),
-                     ("A3 öğrenilmiş-kapı", lambda: run_pipeline(fr, gts[0], OpenCVTracker("vit", model), cfg, gate=LearnedGate(net, thr_p)))):
-        r = fn(); I, C = per_frame([r[i]['box'] for i in vis], [gts[i] for i in vis])
-        full = np.zeros(len(gts)); full[vis] = I
-        res[name] = (success_auc(I), precision_at(C), recovery_rate(full, labels))
-    return res
+FIRST_SCENE_SEED = 5000  # eğitim tohumlarından (1000+) farklı
+
+
+def evaluate(frames, gts, labels, model, net, cfg, net_thr):
+    """Üç sistemi aynı videoda koşturur. gts: kutu ya da None.
+
+    Döner: {sistem adı: (Success AUC, Precision@20, Recovery)}. Metrikler yalnızca kutusu olan karelerde.
+    """
+    def new_tracker():
+        return OpenCVTracker("vit", model)
+
+    runners = {
+        "A0 baseline": lambda: run_baseline(frames, gts[0], new_tracker()),
+        "A3 eşik-kapı": lambda: run_pipeline(frames, gts[0], new_tracker(), cfg),
+        "A3 öğrenilmiş-kapı": lambda: run_pipeline(frames, gts[0], new_tracker(), cfg,
+                                                   gate=LearnedGate(net, net_thr)),
+    }
+    visible = [i for i, gt in enumerate(gts) if gt is not None]
+    scores = {}
+    for name, run in runners.items():
+        results = run()
+        ious, errors = per_frame([results[i]["box"] for i in visible], [gts[i] for i in visible])
+        all_ious = np.zeros(len(gts))  # Recovery zaman sırasına bakar: tüm kareler gerekir
+        all_ious[visible] = ious
+        scores[name] = (success_auc(ious), precision_at(errors), recovery_rate(all_ious, labels))
+    return scores
+
+
+def evaluate_synthetic(num_videos, model, net, cfg, net_thr):
+    collected = {}
+    rng = np.random.default_rng(7)
+    for video in range(num_videos):
+        frames, gts = make_scene(FIRST_SCENE_SEED + video)
+        # rng çağrı sırası veriyi belirler: tür, kip, başlangıç, süre
+        kind = str(rng.choice(KINDS))
+        mode = str(rng.choice(MODES))
+        start = int(rng.integers(35, 80))
+        length = int(rng.integers(15, 45))
+        frames, labels = apply_occlusion(frames, gts, start, length, kind, mode, video, alpha=alpha_for(kind))
+        for name, values in evaluate(frames, gts, labels, model, net, cfg, net_thr).items():
+            collected.setdefault(name, []).append(values)
+
+    print(f"[sentetik, {num_videos} yeni video, ortalama]  (AUC, P@20, Recovery)")
+    for name, rows in collected.items():
+        auc, precision, recovery = (np.nanmean([row[i] for row in rows]) for i in range(3))
+        print(f"  {name:20s} AUC={auc:.3f} P@20={precision:.3f} Rec={recovery:.2f}")
+
+
+def evaluate_video(frames, model, net, cfg, net_thr):
+    gts = red_boxes(frames)
+    labels = [1 if gt is None else 0 for gt in gts]  # kırmızı görünmüyorsa "kapalı" say
+    print("[gerçek video (sözde-GT)]")
+    for name, (auc, precision, recovery) in evaluate(frames, gts, labels, model, net, cfg, net_thr).items():
+        print(f"  {name:20s} AUC={auc:.3f} P@20={precision:.3f} Rec={recovery:.2f}")
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Skor eşiği ve öğrenilmiş kapıyı karşılaştırır.")
+    parser.add_argument("model", help="vit.onnx dosyasının yolu")
+    parser.add_argument("video", help="kırmızı hedefli, kutu çizilmemiş video")
+    parser.add_argument("start", type=int, help="kutunun verildiği kare")
+    # X Y W H değerleri geriye uyumluluk için alınır; kutular renk maskesinden çıkarılır
+    parser.add_argument("box", type=float, nargs=4, metavar=("X", "Y", "W", "H"), help="kullanılmıyor")
+    parser.add_argument("num_videos", type=int, nargs="?", default=12)
+    args = parser.parse_args()
+
+    net = ConfidenceNet.load("confidence_net.pkl")
+    thresholds = np.load("gate_thresholds.npz")  # iki kapının da eşiği doğrulamada seçilmiştir
+    cfg = Config()
+    cfg.score_thr, net_thr = float(thresholds["thr_s"]), float(thresholds["thr_p"])
+    print(f"eşikler: skor {cfg.score_thr:.2f}, ağ {net_thr:.2f}")
+
+    evaluate_synthetic(args.num_videos, args.model, net, cfg, net_thr)
+    evaluate_video(read_frames(args.video, start=args.start), args.model, net, cfg, net_thr)
+
 
 if __name__ == "__main__":
-    model, vid, st = sys.argv[1], sys.argv[2], int(sys.argv[3]); box = [float(v) for v in sys.argv[4:8]]
-    net = ConfidenceNet.load("confidence_net.pkl"); cfg = Config()
-    th = np.load("gate_thresholds.npz")  # train_eval_gate.py'nin doğrulamada seçtiği eşikler (iki kapı için de)
-    cfg.score_thr, thr_p = float(th["thr_s"]), float(th["thr_p"])
-    print(f"eşikler: skor {cfg.score_thr:.2f}, ağ {thr_p:.2f}")
-    agg = {}
-    rng = np.random.default_rng(7); NV = int(sys.argv[8]) if len(sys.argv) > 8 else 12
-    for v in range(NV):
-        fr, gt = make_scene(5000 + v)
-        kind = str(rng.choice(["texture", "noise", "smoke"])); mode = str(rng.choice(["static", "follow"]))
-        fr, lab = apply_occlusion(fr, gt, int(rng.integers(35, 80)), int(rng.integers(15, 45)), kind, mode, v, alpha=0.85 if kind == "smoke" else 1.0)
-        for k, val in evaluate(fr, gt, lab, model, net, cfg, thr_p).items(): agg.setdefault(k, []).append(val)
-    print(f"[sentetik, {NV} yeni video, ortalama]  (AUC, P@20, Recovery)")
-    for k, v in agg.items(): print(f"  {k:20s} AUC={np.nanmean([a[0] for a in v]):.3f} P@20={np.nanmean([a[1] for a in v]):.3f} Rec={np.nanmean([a[2] for a in v]):.2f}")
-    cap = cv2.VideoCapture(vid); fr = []
-    while True:
-        ok, f = cap.read()
-        if not ok: break
-        fr.append(f)
-    fr = fr[st:]; gts = red_boxes(fr); lab = [1 if g is None else 0 for g in gts]
-    print("[gerçek video (sözde-GT)]")
-    for k, v in evaluate(fr, [g if g else None for g in gts], lab, model, net, cfg, thr_p).items():
-        print(f"  {k:20s} AUC={v[0]:.3f} P@20={v[1]:.3f} Rec={v[2]:.2f}")
+    main()

@@ -124,7 +124,7 @@ Resmî site erişilemediği için betik Internet Archive kopyalarını indirir; 
 ```
 configs/       eşikler ve ayarlar
 core/          takipçi sarmalayıcı, Kalman, özellikler, güven ağı, durum makinesi
-utils/         kutu işlemleri, sentetik sahne ve kapanma üretimi
+utils/         kutu işlemleri, video okuma, çizim, sentetik sahne ve kapanma, renkten yaklaşık etiket
 evaluation/    metrikler
 scripts/       test, video çalıştırma, eğitim, karşılaştırma, veri indirme
 ```

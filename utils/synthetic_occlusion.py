@@ -1,46 +1,63 @@
-"""Gerçek videolara sentetik kapanma basar. Siyah kutu DEĞİL: dokulu yama, gürültü, yarı saydam 'duman'."""
-import numpy as np, cv2
+"""Videolara sentetik kapanma basar. Düz siyah kutu değil: dokulu yama, gürültü, yarı saydam duman."""
+import cv2
+import numpy as np
+
+KINDS = ("texture", "noise", "smoke")
+MODES = ("static", "follow")
+
+COVER_THRESHOLD = 0.7  # hedef alanının bu orandan fazlası örtülüyse kare "kapalı" sayılır
+MIN_OPAQUE_ALPHA = 0.6  # örtücü bundan saydamsa kare "kapalı" sayılmaz
+
+
+def alpha_for(kind):
+    """Eğitim ve değerlendirmede kullanılan opaklık: duman yarı saydam, diğerleri tam opak."""
+    return 0.85 if kind == "smoke" else 1.0
+
 
 def _texture(h, w, rng, kind):
     if kind == "texture":
-        t = rng.integers(0, 255, (h, w, 3), dtype=np.uint8)
-        return cv2.GaussianBlur(t, (0, 0), 3)
+        noise = rng.integers(0, 255, (h, w, 3), dtype=np.uint8)
+        return cv2.GaussianBlur(noise, (0, 0), 3)
     if kind == "smoke":
-        t = np.full((h, w, 3), 200, np.uint8)
-        n = cv2.GaussianBlur(rng.integers(0, 80, (h, w, 3), dtype=np.uint8), (0, 0), 8)
-        return cv2.add(t, n)
+        base = np.full((h, w, 3), 200, np.uint8)
+        variation = cv2.GaussianBlur(rng.integers(0, 80, (h, w, 3), dtype=np.uint8), (0, 0), 8)
+        return cv2.add(base, variation)
     return rng.integers(0, 255, (h, w, 3), dtype=np.uint8)  # noise
 
+
 def apply_occlusion(frames, gt_boxes, start, length, kind="texture", mode="static", seed=0, alpha=1.0):
-    """
-    frames: list[H,W,3]; gt_boxes: list[[x,y,w,h]]
-    mode='static': perde, start karesindeki hedef konumunun ortasında, hedeften büyük, sabit.
-    mode='follow': yama hedefle birlikte hareket eder (kapanma tüm süre boyunca tam).
-    alpha<1: yarı saydam (duman).
-    Döner: yeni_frames, labels (1=kapalı, 0=görünür) -- görünür kutu alanının >%70'i örtülüyse 1.
+    """[start, start + length) aralığındaki karelere örtücü yama basar.
+
+    frames: list[H, W, 3]; gt_boxes: list[[x, y, w, h]]
+    mode="static": yama, start karesindeki hedefin üstünde sabit durur (hedeften büyüktür).
+    mode="follow": yama hedefle birlikte hareket eder.
+    alpha < 1: yarı saydam.
+    Döner: (yeni_kareler, etiketler); etiket 1 = kapalı, 0 = görünür.
     """
     rng = np.random.default_rng(seed)
-    H, W = frames[0].shape[:2]
-    out, labels = [], []
+    height, width = frames[0].shape[:2]
     x0, y0, w0, h0 = gt_boxes[min(start, len(gt_boxes) - 1)]
-    pw, ph = int(w0 * 1.6) + 20, int(h0 * 1.6) + 20
-    tex = _texture(ph, pw, rng, kind)
-    for t, (f, g) in enumerate(zip(frames, gt_boxes)):
-        f = f.copy(); lab = 0
+    patch_w, patch_h = int(w0 * 1.6) + 20, int(h0 * 1.6) + 20
+    texture = _texture(patch_h, patch_w, rng, kind)
+
+    occluded_frames, labels = [], []
+    for t, (frame, gt) in enumerate(zip(frames, gt_boxes)):
+        frame, label = frame.copy(), 0
         if start <= t < start + length:
-            if mode == "follow":
-                px, py = int(g[0] + g[2] / 2 - pw / 2), int(g[1] + g[3] / 2 - ph / 2)
-            else:
-                px, py = int(x0 + w0 / 2 - pw / 2), int(y0 + h0 / 2 - ph / 2)
-            xa, ya, xb, yb = max(px, 0), max(py, 0), min(px + pw, W), min(py + ph, H)
-            if xb > xa and yb > ya:
-                tx, ty = xa - px, ya - py
-                patch = tex[ty:ty + (yb - ya), tx:tx + (xb - xa)]
-                roi = f[ya:yb, xa:xb]
-                f[ya:yb, xa:xb] = cv2.addWeighted(patch, alpha, roi, 1 - alpha, 0)
-                ix = max(0, min(xb, g[0] + g[2]) - max(xa, g[0]))
-                iy = max(0, min(yb, g[1] + g[3]) - max(ya, g[1]))
-                cover = (ix * iy) / max(1.0, g[2] * g[3])
-                lab = int(cover > 0.7 and alpha >= 0.6)
-        out.append(f); labels.append(lab)
-    return out, labels
+            # yamanın sol üst köşesi: hedefi (ya da başlangıç konumunu) ortalar
+            tx, ty, tw, th = gt if mode == "follow" else (x0, y0, w0, h0)
+            px, py = int(tx + tw / 2 - patch_w / 2), int(ty + th / 2 - patch_h / 2)
+            # görüntü içinde kalan bölüm
+            left, top = max(px, 0), max(py, 0)
+            right, bottom = min(px + patch_w, width), min(py + patch_h, height)
+            if right > left and bottom > top:
+                patch = texture[top - py:bottom - py, left - px:right - px]
+                region = frame[top:bottom, left:right]
+                frame[top:bottom, left:right] = cv2.addWeighted(patch, alpha, region, 1 - alpha, 0)
+                overlap_w = max(0, min(right, gt[0] + gt[2]) - max(left, gt[0]))
+                overlap_h = max(0, min(bottom, gt[1] + gt[3]) - max(top, gt[1]))
+                cover = (overlap_w * overlap_h) / max(1.0, gt[2] * gt[3])
+                label = int(cover > COVER_THRESHOLD and alpha >= MIN_OPAQUE_ALPHA)
+        occluded_frames.append(frame)
+        labels.append(label)
+    return occluded_frames, labels
